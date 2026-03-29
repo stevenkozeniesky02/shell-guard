@@ -1,0 +1,33 @@
+{
+  "name": "@agentsid/shell-guard",
+  "version": "0.1.0",
+  "description": "MCP server for safe shell access — every command validated against per-agent permission rules before execution. Powered by AgentsID.",
+  "type": "module",
+  "main": "server.mjs",
+  "bin": {
+    "shell-guard": "./server.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "shell",
+    "security",
+    "ai-agents",
+    "permissions",
+    "agentsid",
+    "claude-code",
+    "cursor"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stevenkozeniesky02/shell-guard"
+  },
+  "dependencies": {
+    "@agentsid/sdk": "^0.1.0",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
