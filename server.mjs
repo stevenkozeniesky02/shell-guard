@@ -19,6 +19,7 @@
 import { execSync } from "child_process";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const PROJECT_KEY = process.env.AGENTSID_PROJECT_KEY || "";
 const AGENT_TOKEN = process.env.AGENTSID_AGENT_TOKEN || "";
@@ -216,7 +217,7 @@ const server = new Server(
 );
 
 // List tools
-server.setRequestHandler("tools/list", async () => ({
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "run_command",
@@ -261,7 +262,7 @@ server.setRequestHandler("tools/list", async () => ({
 }));
 
 // Handle tool calls
-server.setRequestHandler("tools/call", async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   if (name === "list_categories") {
