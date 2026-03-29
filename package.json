@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "description": "MCP server for safe shell, file, database, git, and HTTP access. Every operation validated against per-agent permission rules. Powered by AgentsID.",
   "type": "module",
-  "main": "server.mjs",
+  "main": "src/index.mjs",
   "bin": {
-    "agentsid-guard": "./server.mjs"
+    "agentsid-guard": "./src/index.mjs"
   },
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node src/index.mjs",
     "test": "node test.mjs"
   },
   "keywords": [
