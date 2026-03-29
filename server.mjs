@@ -710,6 +710,244 @@ const handlers = {
     }
   },
 
+  // ── System Info ──
+  async system_info() {
+    const toolName = "system.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const os = execSync("uname -a", { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+      let cpu = "", mem = "", disk = "";
+      try { cpu = execSync("sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu 2>/dev/null | grep 'Model name' || echo 'unknown'", { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim(); } catch { cpu = "unknown"; }
+      try { mem = execSync("free -h 2>/dev/null || vm_stat 2>/dev/null | head -5", { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim(); } catch { mem = "unavailable"; }
+      try { disk = execSync("df -h / | tail -1", { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim(); } catch { disk = "unavailable"; }
+      const uptime = execSync("uptime", { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+      return success(`OS: ${os}\nCPU: ${cpu}\nMemory:\n${mem}\nDisk (/):\n${disk}\nUptime: ${uptime}`, toolName);
+    } catch (err) {
+      return error(`Failed to get system info: ${err.message}`);
+    }
+  },
+
+  async disk_usage({ path: diskPath }) {
+    const toolName = "system.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const target = diskPath || "/";
+      const output = execSync(`df -h ${target}`, { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Failed to get disk usage: ${err.message}`);
+    }
+  },
+
+  async memory_usage() {
+    const toolName = "system.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync("free -h 2>/dev/null || top -l 1 -s 0 | head -10 2>/dev/null || vm_stat", {
+        encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Failed to get memory usage: ${err.message}`);
+    }
+  },
+
+  // ── Log Management ──
+  async log_read({ path: logPath, lines }) {
+    if (!logPath) return error("path is required");
+    const resolved = resolve(logPath);
+    const n = lines ? parseInt(lines, 10) : 100;
+    const toolName = "log.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`tail -n ${n} "${resolved}"`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output || "(empty log)", toolName);
+    } catch (err) {
+      return error(`Failed to read log ${logPath}: ${err.message}`);
+    }
+  },
+
+  async log_search({ path: logPath, pattern, lines }) {
+    if (!logPath) return error("path is required");
+    if (!pattern) return error("pattern is required");
+    const resolved = resolve(logPath);
+    const n = lines ? parseInt(lines, 10) : 50;
+    const toolName = "log.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`grep -i "${pattern.replace(/"/g, '\\"')}" "${resolved}" | tail -n ${n}`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output || "(no matches)", toolName);
+    } catch (err) {
+      if (err.status === 1) return success("(no matches)", toolName);
+      return error(`Log search failed: ${err.message}`);
+    }
+  },
+
+  // ── SSH / Remote ──
+  async ssh_run({ host, command: sshCmd, user, port }) {
+    if (!host) return error("host is required");
+    if (!sshCmd) return error("command is required");
+    const sshUser = user || "root";
+    const sshPort = port || "22";
+    const toolName = `ssh.${host.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(
+        `ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -p ${sshPort} ${sshUser}@${host} "${sshCmd.replace(/"/g, '\\"')}"`,
+        { encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"] }
+      );
+      return success(`[${sshUser}@${host}] ${output}`, toolName);
+    } catch (err) {
+      return error(`SSH to ${host} failed: ${err.stderr || err.message}`);
+    }
+  },
+
+  // ── Package Management ──
+  async package_list({ manager }) {
+    const toolName = "package.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const mgr = manager || "auto";
+    let cmd;
+    if (mgr === "npm" || mgr === "auto") { try { cmd = "npm list -g --depth=0 2>/dev/null"; } catch {} }
+    if (mgr === "pip" || (!cmd && mgr === "auto")) { cmd = "pip list 2>/dev/null || pip3 list 2>/dev/null"; }
+    if (mgr === "brew" || (!cmd && mgr === "auto")) { cmd = "brew list 2>/dev/null"; }
+    if (mgr === "apt") { cmd = "dpkg -l 2>/dev/null | tail -20"; }
+    if (!cmd) cmd = "echo 'No package manager detected'";
+
+    try {
+      const output = execSync(cmd, { encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"] });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Package list failed: ${err.message}`);
+    }
+  },
+
+  async package_info({ name: pkgName, manager }) {
+    if (!pkgName) return error("name is required");
+    const toolName = "package.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const mgr = manager || "npm";
+    let cmd;
+    if (mgr === "npm") cmd = `npm view ${pkgName} 2>/dev/null`;
+    else if (mgr === "pip") cmd = `pip show ${pkgName} 2>/dev/null || pip3 show ${pkgName}`;
+    else if (mgr === "brew") cmd = `brew info ${pkgName} 2>/dev/null`;
+    else if (mgr === "apt") cmd = `apt show ${pkgName} 2>/dev/null`;
+    else cmd = `echo 'Unsupported manager: ${mgr}'`;
+
+    try {
+      const output = execSync(cmd, { encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"] });
+      return success(output || `(${pkgName} not found)`, toolName);
+    } catch (err) {
+      return error(`Package info failed: ${err.message}`);
+    }
+  },
+
+  async package_install({ name: pkgName, manager }) {
+    if (!pkgName) return error("name is required");
+    const toolName = "package.danger.install";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const mgr = manager || "npm";
+    let cmd;
+    if (mgr === "npm") cmd = `npm install -g ${pkgName}`;
+    else if (mgr === "pip") cmd = `pip install ${pkgName}`;
+    else if (mgr === "brew") cmd = `brew install ${pkgName}`;
+    else if (mgr === "apt") cmd = `sudo apt install -y ${pkgName}`;
+    else return error(`Unsupported manager: ${mgr}`);
+
+    try {
+      const output = execSync(cmd, { encoding: "utf-8", timeout: 120000, stdio: ["pipe", "pipe", "pipe"] });
+      return success(`Installed ${pkgName}:\n${output}`, toolName);
+    } catch (err) {
+      return error(`Install failed: ${err.stderr || err.message}`);
+    }
+  },
+
+  // ── Cloud CLI (AWS) ──
+  async aws_run({ command: awsCmd }) {
+    if (!awsCmd) return error("command is required (e.g., 's3 ls', 'ec2 describe-instances')");
+
+    const upper = awsCmd.trim().split(/\s+/);
+    const service = upper[0] || "unknown";
+    const action = upper[1] || "unknown";
+
+    // Classify by risk
+    let toolName;
+    const readActions = ["ls", "list", "describe", "get", "head", "show"];
+    const dangerActions = ["delete", "terminate", "remove", "destroy", "deregister", "purge"];
+    if (readActions.some((a) => action.startsWith(a))) {
+      toolName = `aws.read.${service}`;
+    } else if (dangerActions.some((a) => action.startsWith(a))) {
+      toolName = `aws.danger.${service}`;
+    } else {
+      toolName = `aws.write.${service}`;
+    }
+
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`aws ${awsCmd}`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`AWS CLI failed: ${err.stderr || err.message}`);
+    }
+  },
+
+  // ── Kubectl ──
+  async kubectl_run({ command: kubectlCmd }) {
+    if (!kubectlCmd) return error("command is required (e.g., 'get pods', 'logs my-pod')");
+
+    const parts = kubectlCmd.trim().split(/\s+/);
+    const action = parts[0] || "unknown";
+
+    let toolName;
+    const readActions = ["get", "describe", "logs", "top", "explain", "api-resources", "cluster-info"];
+    const dangerActions = ["delete", "drain", "cordon", "taint"];
+    if (readActions.includes(action)) {
+      toolName = `k8s.read.${action}`;
+    } else if (dangerActions.includes(action)) {
+      toolName = `k8s.danger.${action}`;
+    } else {
+      toolName = `k8s.write.${action}`;
+    }
+
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`kubectl ${kubectlCmd}`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`kubectl failed: ${err.stderr || err.message}`);
+    }
+  },
+
   // ── List Categories ──
   async list_categories() {
     const categories = {
@@ -744,6 +982,17 @@ const handlers = {
       "container.write": "Start/stop Docker containers",
       "container.danger": "Remove Docker containers",
       "network.read": "Ping, traceroute, DNS lookup, list ports",
+      "system.read": "System info, disk usage, memory usage, uptime",
+      "log.read": "Read and search log files",
+      "ssh.*": "SSH commands scoped per host (ssh.hostname)",
+      "package.read": "List packages, get package info",
+      "package.danger.*": "Install/update packages",
+      "aws.read.*": "AWS CLI read operations (ls, describe, get) per service",
+      "aws.write.*": "AWS CLI write operations per service",
+      "aws.danger.*": "AWS CLI destructive operations (delete, terminate) per service",
+      "k8s.read.*": "kubectl read operations (get, describe, logs)",
+      "k8s.write.*": "kubectl write operations (apply, create, scale)",
+      "k8s.danger.*": "kubectl destructive operations (delete, drain)",
     };
 
     let output = "AgentsID Guard — Permission Categories:\n\n";
@@ -1030,6 +1279,23 @@ const TOOLS = [
       required: ["domain"],
     },
   },
+  // ── System ──
+  { name: "system_info", description: "Get system overview: OS, CPU, memory, disk, uptime. Requires system.read.", inputSchema: { type: "object", properties: {} } },
+  { name: "disk_usage", description: "Get disk usage for a path. Requires system.read.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Mount point or path (default: /)" } } } },
+  { name: "memory_usage", description: "Get memory usage breakdown. Requires system.read.", inputSchema: { type: "object", properties: {} } },
+  // ── Logs ──
+  { name: "log_read", description: "Read last N lines of a log file. Requires log.read.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to log file" }, lines: { type: "string", description: "Number of lines (default: 100)" } }, required: ["path"] } },
+  { name: "log_search", description: "Search a log file for a pattern. Requires log.read.", inputSchema: { type: "object", properties: { path: { type: "string", description: "Path to log file" }, pattern: { type: "string", description: "Search pattern (case-insensitive)" }, lines: { type: "string", description: "Max results (default: 50)" } }, required: ["path", "pattern"] } },
+  // ── SSH ──
+  { name: "ssh_run", description: "Run a command on a remote host via SSH. Permission scoped per host (ssh.hostname). Requires SSH keys configured.", inputSchema: { type: "object", properties: { host: { type: "string", description: "Remote hostname or IP" }, command: { type: "string", description: "Command to execute" }, user: { type: "string", description: "SSH user (default: root)" }, port: { type: "string", description: "SSH port (default: 22)" } }, required: ["host", "command"] } },
+  // ── Packages ──
+  { name: "package_list", description: "List installed packages. Requires package.read.", inputSchema: { type: "object", properties: { manager: { type: "string", description: "Package manager", enum: ["npm", "pip", "brew", "apt", "auto"] } } } },
+  { name: "package_info", description: "Get info about a package. Requires package.read.", inputSchema: { type: "object", properties: { name: { type: "string", description: "Package name" }, manager: { type: "string", description: "Package manager", enum: ["npm", "pip", "brew", "apt"] } }, required: ["name"] } },
+  { name: "package_install", description: "Install a package. Requires package.danger.install (high risk).", inputSchema: { type: "object", properties: { name: { type: "string", description: "Package name" }, manager: { type: "string", description: "Package manager", enum: ["npm", "pip", "brew", "apt"] } }, required: ["name"] } },
+  // ── AWS ──
+  { name: "aws_run", description: "Run an AWS CLI command. Read ops (ls, describe) require aws.read.{service}. Write ops require aws.write.{service}. Destructive ops (delete, terminate) require aws.danger.{service}.", inputSchema: { type: "object", properties: { command: { type: "string", description: "AWS CLI command (e.g., 's3 ls', 'ec2 describe-instances')" } }, required: ["command"] } },
+  // ── Kubernetes ──
+  { name: "kubectl_run", description: "Run a kubectl command. Read ops (get, describe, logs) require k8s.read.*. Write ops (apply, create) require k8s.write.*. Destructive ops (delete, drain) require k8s.danger.*.", inputSchema: { type: "object", properties: { command: { type: "string", description: "kubectl command (e.g., 'get pods', 'logs my-pod -f', 'apply -f deploy.yaml')" } }, required: ["command"] } },
   // ── Utility ──
   {
     name: "check_permission",
