@@ -402,6 +402,314 @@ const handlers = {
     };
   },
 
+  // ── Environment / Secrets ──
+  async env_list() {
+    const toolName = "env.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const safe = Object.entries(process.env)
+      .filter(([k]) => !k.match(/KEY|SECRET|TOKEN|PASSWORD|PASS|CRED|AUTH/i))
+      .map(([k, val]) => `${k}=${val}`)
+      .sort()
+      .join("\n");
+    return success(safe || "(no environment variables)", toolName);
+  },
+
+  async env_get({ name }) {
+    if (!name) return error("name is required");
+    const toolName = name.match(/KEY|SECRET|TOKEN|PASSWORD|PASS|CRED|AUTH/i)
+      ? "env.read.secret"
+      : "env.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const val = process.env[name];
+    if (val === undefined) return success(`${name} is not set`, toolName);
+    return success(`${name}=${val}`, toolName);
+  },
+
+  async env_set({ name, value }) {
+    if (!name) return error("name is required");
+    if (value === undefined) return error("value is required");
+    const toolName = "env.write";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    process.env[name] = value;
+    return success(`Set ${name}=${value}`, toolName);
+  },
+
+  // ── Process Management ──
+  async process_list() {
+    const toolName = "process.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync("ps aux --sort=-%cpu | head -20", {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      // macOS ps doesn't support --sort
+      try {
+        const output = execSync("ps aux | head -20", {
+          encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+        });
+        return success(output, toolName);
+      } catch (e) {
+        return error(`Failed to list processes: ${e.message}`);
+      }
+    }
+  },
+
+  async process_kill({ pid, signal }) {
+    if (!pid) return error("pid is required");
+    const sig = signal || "TERM";
+    const toolName = "process.kill";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      execSync(`kill -${sig} ${parseInt(pid, 10)}`, {
+        encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(`Sent ${sig} to PID ${pid}`, toolName);
+    } catch (err) {
+      return error(`Failed to kill PID ${pid}: ${err.stderr || err.message}`);
+    }
+  },
+
+  async process_info({ pid }) {
+    if (!pid) return error("pid is required");
+    const toolName = "process.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`ps -p ${parseInt(pid, 10)} -o pid,ppid,user,%cpu,%mem,stat,start,command`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Process ${pid} not found or inaccessible`);
+    }
+  },
+
+  // ── Cron / Scheduling ──
+  async cron_list() {
+    const toolName = "cron.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync("crontab -l 2>/dev/null || echo '(no crontab)'", {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return success("(no crontab configured)", toolName);
+    }
+  },
+
+  async cron_add({ schedule, command }) {
+    if (!schedule) return error("schedule is required (e.g., '0 * * * *')");
+    if (!command) return error("command is required");
+    const toolName = "cron.write";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const existing = execSync("crontab -l 2>/dev/null || echo ''", {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      const newEntry = `${schedule} ${command}`;
+      const updated = existing ? `${existing}\n${newEntry}` : newEntry;
+      execSync(`echo "${updated.replace(/"/g, '\\"')}" | crontab -`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(`Added cron job: ${newEntry}`, toolName);
+    } catch (err) {
+      return error(`Failed to add cron job: ${err.stderr || err.message}`);
+    }
+  },
+
+  async cron_remove({ pattern }) {
+    if (!pattern) return error("pattern is required (text to match in the cron entry)");
+    const toolName = "cron.danger";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      execSync(`crontab -l 2>/dev/null | grep -v "${pattern.replace(/"/g, '\\"')}" | crontab -`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(`Removed cron entries matching: ${pattern}`, toolName);
+    } catch (err) {
+      return error(`Failed to remove cron job: ${err.stderr || err.message}`);
+    }
+  },
+
+  // ── Container Management ──
+  async container_list({ all }) {
+    const toolName = "container.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const flag = all ? "-a" : "";
+    try {
+      const output = execSync(`docker ps ${flag} --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Ports}}"`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output || "(no containers)", toolName);
+    } catch (err) {
+      return error(`Docker not available or not running: ${err.message}`);
+    }
+  },
+
+  async container_inspect({ id }) {
+    if (!id) return error("id is required (container ID or name)");
+    const toolName = "container.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`docker inspect ${id} --format '{{json .}}'`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Container ${id} not found: ${err.message}`);
+    }
+  },
+
+  async container_logs({ id, tail }) {
+    if (!id) return error("id is required (container ID or name)");
+    const toolName = "container.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const tailArg = tail ? `--tail ${parseInt(tail, 10)}` : "--tail 50";
+    try {
+      const output = execSync(`docker logs ${id} ${tailArg} 2>&1`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output || "(no logs)", toolName);
+    } catch (err) {
+      return error(`Failed to get logs for ${id}: ${err.message}`);
+    }
+  },
+
+  async container_start({ id }) {
+    if (!id) return error("id is required");
+    const toolName = "container.write";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      execSync(`docker start ${id}`, { encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"] });
+      return success(`Started container ${id}`, toolName);
+    } catch (err) {
+      return error(`Failed to start ${id}: ${err.message}`);
+    }
+  },
+
+  async container_stop({ id }) {
+    if (!id) return error("id is required");
+    const toolName = "container.write";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      execSync(`docker stop ${id}`, { encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"] });
+      return success(`Stopped container ${id}`, toolName);
+    } catch (err) {
+      return error(`Failed to stop ${id}: ${err.message}`);
+    }
+  },
+
+  async container_remove({ id, force }) {
+    if (!id) return error("id is required");
+    const toolName = "container.danger";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const forceFlag = force ? " -f" : "";
+    try {
+      execSync(`docker rm${forceFlag} ${id}`, { encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"] });
+      return success(`Removed container ${id}`, toolName);
+    } catch (err) {
+      return error(`Failed to remove ${id}: ${err.message}`);
+    }
+  },
+
+  // ── Network Diagnostics ──
+  async network_ping({ host, count }) {
+    if (!host) return error("host is required");
+    const toolName = "network.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const c = count ? parseInt(count, 10) : 4;
+    try {
+      const output = execSync(`ping -c ${c} ${host}`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Ping failed: ${err.stderr || err.message}`);
+    }
+  },
+
+  async network_ports() {
+    const toolName = "network.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync("lsof -i -P -n | grep LISTEN 2>/dev/null || netstat -tlnp 2>/dev/null || ss -tlnp 2>/dev/null", {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output || "(no listening ports found)", toolName);
+    } catch (err) {
+      return error(`Failed to list ports: ${err.message}`);
+    }
+  },
+
+  async network_traceroute({ host }) {
+    if (!host) return error("host is required");
+    const toolName = "network.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    try {
+      const output = execSync(`traceroute -m 15 ${host} 2>&1`, {
+        encoding: "utf-8", timeout: 30000, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output, toolName);
+    } catch (err) {
+      return error(`Traceroute failed: ${err.stderr || err.message}`);
+    }
+  },
+
+  async network_dns({ domain, type }) {
+    if (!domain) return error("domain is required");
+    const toolName = "network.read";
+    const v = await validate(toolName);
+    if (!v.allowed) return blocked(toolName, v.reason);
+
+    const recordType = type || "A";
+    try {
+      const output = execSync(`dig ${domain} ${recordType} +short`, {
+        encoding: "utf-8", timeout: TIMEOUT, stdio: ["pipe", "pipe", "pipe"],
+      });
+      return success(output || "(no records)", toolName);
+    } catch (err) {
+      return error(`DNS lookup failed: ${err.message}`);
+    }
+  },
+
   // ── List Categories ──
   async list_categories() {
     const categories = {
@@ -424,6 +732,18 @@ const handlers = {
       "http.post": "HTTP POST requests",
       "http.put": "HTTP PUT requests",
       "http.delete": "HTTP DELETE requests",
+      "env.read": "Read non-secret environment variables",
+      "env.read.secret": "Read secret environment variables (KEY, TOKEN, PASSWORD, etc.)",
+      "env.write": "Set environment variables",
+      "process.read": "List processes, get process info",
+      "process.kill": "Kill processes by PID",
+      "cron.read": "List cron jobs",
+      "cron.write": "Add cron jobs",
+      "cron.danger": "Remove cron jobs",
+      "container.read": "List, inspect, view logs of Docker containers",
+      "container.write": "Start/stop Docker containers",
+      "container.danger": "Remove Docker containers",
+      "network.read": "Ping, traceroute, DNS lookup, list ports",
     };
 
     let output = "AgentsID Guard — Permission Categories:\n\n";
@@ -530,12 +850,193 @@ const TOOLS = [
       required: ["url"],
     },
   },
+  // ── Environment ──
+  {
+    name: "env_list",
+    description: "List environment variables (secrets auto-filtered). Requires env.read permission.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "env_get",
+    description: "Get a specific environment variable. Secret-named vars (KEY, TOKEN, PASSWORD) require env.read.secret permission.",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string", description: "Environment variable name" } },
+      required: ["name"],
+    },
+  },
+  {
+    name: "env_set",
+    description: "Set an environment variable. Requires env.write permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Variable name" },
+        value: { type: "string", description: "Variable value" },
+      },
+      required: ["name", "value"],
+    },
+  },
+  // ── Process ──
+  {
+    name: "process_list",
+    description: "List running processes sorted by CPU usage. Requires process.read permission.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "process_info",
+    description: "Get detailed info about a specific process. Requires process.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: { pid: { type: "string", description: "Process ID" } },
+      required: ["pid"],
+    },
+  },
+  {
+    name: "process_kill",
+    description: "Send a signal to a process. Requires process.kill permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pid: { type: "string", description: "Process ID" },
+        signal: { type: "string", description: "Signal name (default: TERM)", enum: ["TERM", "KILL", "HUP", "INT", "STOP", "CONT"] },
+      },
+      required: ["pid"],
+    },
+  },
+  // ── Cron ──
+  {
+    name: "cron_list",
+    description: "List current user's cron jobs. Requires cron.read permission.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "cron_add",
+    description: "Add a cron job. Requires cron.write permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        schedule: { type: "string", description: "Cron schedule (e.g., '0 * * * *' for hourly)" },
+        command: { type: "string", description: "Command to run" },
+      },
+      required: ["schedule", "command"],
+    },
+  },
+  {
+    name: "cron_remove",
+    description: "Remove cron jobs matching a pattern. Requires cron.danger permission.",
+    inputSchema: {
+      type: "object",
+      properties: { pattern: { type: "string", description: "Text pattern to match in cron entries to remove" } },
+      required: ["pattern"],
+    },
+  },
+  // ── Container ──
+  {
+    name: "container_list",
+    description: "List Docker containers. Requires container.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: { all: { type: "boolean", description: "Include stopped containers (default: false)" } },
+    },
+  },
+  {
+    name: "container_inspect",
+    description: "Get detailed info about a Docker container. Requires container.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Container ID or name" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "container_logs",
+    description: "View Docker container logs. Requires container.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Container ID or name" },
+        tail: { type: "string", description: "Number of lines from the end (default: 50)" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "container_start",
+    description: "Start a stopped Docker container. Requires container.write permission.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Container ID or name" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "container_stop",
+    description: "Stop a running Docker container. Requires container.write permission.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Container ID or name" } },
+      required: ["id"],
+    },
+  },
+  {
+    name: "container_remove",
+    description: "Remove a Docker container. Requires container.danger permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Container ID or name" },
+        force: { type: "boolean", description: "Force removal of running container" },
+      },
+      required: ["id"],
+    },
+  },
+  // ── Network ──
+  {
+    name: "network_ping",
+    description: "Ping a host. Requires network.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        host: { type: "string", description: "Hostname or IP to ping" },
+        count: { type: "string", description: "Number of pings (default: 4)" },
+      },
+      required: ["host"],
+    },
+  },
+  {
+    name: "network_ports",
+    description: "List listening network ports. Requires network.read permission.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "network_traceroute",
+    description: "Traceroute to a host. Requires network.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: { host: { type: "string", description: "Hostname or IP" } },
+      required: ["host"],
+    },
+  },
+  {
+    name: "network_dns",
+    description: "DNS lookup for a domain. Requires network.read permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        domain: { type: "string", description: "Domain to look up" },
+        type: { type: "string", description: "Record type (default: A)", enum: ["A", "AAAA", "MX", "TXT", "CNAME", "NS", "SOA"] },
+      },
+      required: ["domain"],
+    },
+  },
+  // ── Utility ──
   {
     name: "check_permission",
     description: "Check if a tool/action would be allowed without executing it.",
     inputSchema: {
       type: "object",
-      properties: { tool: { type: "string", description: "Tool name to check (e.g., 'shell.read.ls', 'file.write', 'db.danger.delete')" } },
+      properties: { tool: { type: "string", description: "Tool name to check (e.g., 'shell.read.ls', 'file.write', 'container.danger')" } },
       required: ["tool"],
     },
   },
