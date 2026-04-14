@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://agentsid.dev"><img src="https://img.shields.io/badge/powered%20by-AgentsID-f59e0b?style=flat-square" alt="AgentsID" /></a>
-  <a href="https://github.com/stevenkozeniesky02/shell-guard/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square" alt="License" /></a>
+  <a href="https://github.com/AgentsID-dev/shell-guard/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-f59e0b?style=flat-square" alt="License" /></a>
 </p>
 
 ---
