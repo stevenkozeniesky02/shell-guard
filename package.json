@@ -1,15 +1,20 @@
 {
   "name": "@agentsid/guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for safe shell, file, database, git, and HTTP access. Every operation validated against per-agent permission rules. Powered by AgentsID.",
   "type": "module",
   "main": "src/index.mjs",
   "bin": {
     "agentsid-guard": "./src/index.mjs"
   },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node src/index.mjs",
-    "test": "node test.mjs"
+    "test": "node --check src/index.mjs && echo 'syntax-check passed (no runtime tests yet)'"
   },
   "keywords": [
     "mcp",
@@ -25,14 +30,26 @@
     "agentsid",
     "claude-code",
     "cursor",
+    "codex",
     "guard"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgentsID-dev/shell-guard"
+    "url": "git+https://github.com/AgentsID-dev/agentsid.git",
+    "directory": "mcp-shell-guard"
+  },
+  "homepage": "https://agentsid.dev",
+  "bugs": {
+    "url": "https://github.com/AgentsID-dev/agentsid/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
